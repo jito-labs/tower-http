@@ -56,6 +56,9 @@ use http::{
     HeaderMap, HeaderValue, Method, Request, Response,
 };
 use pin_project_lite::pin_project;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 use std::{
     array,
     future::Future,
@@ -92,6 +95,7 @@ pub use self::{
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct CorsLayer {
+    pub elapsed_us: Arc<AtomicU64>,
     allow_credentials: AllowCredentials,
     allow_headers: AllowHeaders,
     allow_methods: AllowMethods,
@@ -115,6 +119,7 @@ impl CorsLayer {
     /// successful cross-origin requests to your service.
     pub fn new() -> Self {
         Self {
+            elapsed_us: Arc::new(AtomicU64::default()),
             allow_credentials: Default::default(),
             allow_headers: Default::default(),
             allow_methods: Default::default(),
@@ -661,6 +666,7 @@ where
     }
 
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
+        let start = Instant::now();
         let (parts, body) = req.into_parts();
         let origin = parts.headers.get(&header::ORIGIN);
 
@@ -682,6 +688,9 @@ where
             headers.extend(self.layer.allow_headers.to_header(&parts));
             headers.extend(self.layer.max_age.to_header(origin, &parts));
 
+            self.layer
+                .elapsed_us
+                .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
             ResponseFuture {
                 inner: Kind::PreflightCall {
                     allow_origin_future,
@@ -693,6 +702,9 @@ where
             headers.extend(self.layer.expose_headers.to_header(&parts));
 
             let req = Request::from_parts(parts, body);
+            self.layer
+                .elapsed_us
+                .fetch_add(start.elapsed().as_micros() as u64, Ordering::Relaxed);
             ResponseFuture {
                 inner: Kind::CorsCall {
                     allow_origin_future,
